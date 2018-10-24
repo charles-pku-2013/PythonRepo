@@ -68,7 +68,7 @@ if __name__ == "__main__":
                 strHostPort = arg
                 strHost, nPort = parse_host(strHostPort)
                 #  print 'host = %s port = %d' % (strHost, nPort)   # debug
-            elif opt in ("-l", "--logfile"): 
+            elif opt in ("-l", "--logfile"):
                 strLogfile = arg
             elif opt in ("-o", "--output"):
                 strOutput = arg
@@ -136,7 +136,7 @@ if __name__ == "__main__":
     #print json_content["logInfoFileName"]
     with open(json_content["logInfoFileName"]) as logFile:
         for i, line in enumerate(logFile):
-     	    try:
+            try:
                 request = parse.parse(line)
                 bin_req = parse.make_bin_req(request)
                 sender = send.Sender()
@@ -145,12 +145,12 @@ if __name__ == "__main__":
                 if status == "OK":
                     #res = parse.parse_res(bin_res)
                     res = parse_result.parse_result(bin_res)
-		    # \n
-    		    #print hashlib.md5(res+"\n").hexdigest(),"\t",request.query.querystr
-    		    #print request.query.querystr
-	            print res
-    		    #print hashlib.md5(res+"\n").hexdigest(),"\t",request.query.querystr
+                    # \n
+                    #print hashlib.md5(res+"\n").hexdigest(),"\t",request.query.querystr
+                    #print request.query.querystr
+                    print res
+                    #print hashlib.md5(res+"\n").hexdigest(),"\t",request.query.querystr
                     #print res
-    	    except Exception, e:
-     	        print "Decoding Json has failed"
-"""                
+            except Exception, e:
+                print "Decoding Json has failed"
+"""
