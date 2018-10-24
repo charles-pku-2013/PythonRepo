@@ -68,10 +68,11 @@ def test_change_data(zk, path):
                 for v_itr in range(0, len(models[m_itr]["versions"])):
                     model_version = models[m_itr]["versions"][v_itr]["version"]
                     model_status = models[m_itr]["versions"][v_itr]["status"]
-                    if model_version == 1:
+                    if model_version == 2:
                         print 'Found!!!'
                         found = True
                         models[m_itr]["versions"][v_itr]["status"] = 'online'
+                        # models[m_itr]["versions"][v_itr]["status"] = 'deploy_failed'
 
         if not found:
             print 'Not Found!!!'
@@ -139,9 +140,18 @@ if __name__ == '__main__':
         # model_cfg_json = json.dumps(model_cfg_json)
         # test_set_data(zk, "/TPS/Cluster1/Host1", model_cfg_json)
 
+        test_change_data(zk, "/TPS/Cluster1/Host0")
+        test_change_data(zk, "/TPS/Cluster1/Host1")
         test_change_data(zk, "/TPS/Cluster1/Host2")
+        test_change_data(zk, "/TPS/Cluster1/Host3")
+        test_change_data(zk, "/TPS/Cluster1/Host4")
+        test_change_data(zk, "/TPS/Cluster1/Host5")
+        test_change_data(zk, "/TPS/Cluster1/Host6")
+        test_change_data(zk, "/TPS/Cluster1/Host7")
+        test_change_data(zk, "/TPS/Cluster1/Host8")
+        test_change_data(zk, "/TPS/Cluster1/Host9")
 
-        sys.stdin.readline()
+        # sys.stdin.readline()
         zk.stop()
 
     except Exception as ex:

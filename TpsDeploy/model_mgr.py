@@ -3,7 +3,7 @@
 #
 # Examples:
 # batch publish:
-# python TpsDeploy/model_mgr.py --omi 127.0.0.1 --model knn/1 --target /TPS/Cluster1 --cluster --batch 10
+# python TpsDeploy/model_mgr.py --omi 127.0.0.1 --model knn/1 --target /TPS/Cluster1 --cluster --batch 3
 # single publish:
 # python TpsDeploy/model_mgr.py --omi 127.0.0.1 --model knn/1 --target /TPS/Cluster1/Host1
 # check:
@@ -103,6 +103,10 @@ def parse_args():
             log.error("--batch must be used together with --cluster")
             print_usage()
             sys.exit(-1)
+        elif batch_size < 1:
+            log.error("Invalid batch_size! --batch must be above 0")
+            print_usage()
+            sys.exit(-1)
 
     except getopt.GetoptError as err:
         log.error("%s" % err)
@@ -118,6 +122,7 @@ class ZkNode:
         self.model_name = model
         self.model_ver = ver
 
+        # load data on zk node
         data, stat = self.client.get(self.path)
         self.data = {}
         try:
@@ -130,7 +135,7 @@ class ZkNode:
         def OnDataChange(data, stat):
             # print 'OnDataChange data: %s' % data
             try:
-                if self.status == 'not_set' or self.status == 'online':
+                if self.status == 'not_set' or self.status == 'online' or self.status == 'deploy_failed':
                     return
 
                 found = False
@@ -152,6 +157,7 @@ class ZkNode:
 
             except Exception as ex:
                 log.error("Invalid data response: %s" % ex)
+                self.status = 'deploy_failed'
 
     def set_data(self):
         model_list = []
@@ -199,11 +205,18 @@ class ZkNode:
         self.status = "deploy_waiting"
 
     def wait_finish(self):
-        while self.status != 'online':
-            # print self.status
+        while True:
             time.sleep(1)
-        log.info('Successfully publish model %s/%s to %s' %
-                (self.model_name, self.model_ver, self.path))
+            if self.status == 'online':
+                log.info('Successfully publish model %s/%s to %s' %
+                        (self.model_name, self.model_ver, self.path))
+                break
+            elif self.status == 'deploy_failed':
+                log.error('Failed to publish model %s/%s to %s!' %
+                        (self.model_name, self.model_ver, self.path))
+                break
+            else:
+                continue
 
 
 def publish_model_host(client, target):
@@ -215,7 +228,6 @@ def publish_model_host(client, target):
 
 
 def publish_model_batch(client, children):
-    # TODO batch_size
     for child in children:
         path = target + '/' + child
         try:
@@ -224,20 +236,67 @@ def publish_model_batch(client, children):
             log.error(str(ex))
 
 
+def publish_model_batch_parallel(client, children):
+    pending_list = []
+    work_que = []
+
+    for child in children:
+        path = target + '/' + child
+        pending_list.append(path)
+    pending_list.sort(reverse = True)
+    # for item in pending_list:
+        # print item
+
+    # init work_que
+    for i in range(min(batch_size, len(pending_list))):
+        _target = pending_list.pop()
+        log.info('Trying to publish to %s' % _target)
+        node = ZkNode(client, _target, model_name, model_ver)
+        node.set_data()
+        work_que.append(node)
+
+    while len(work_que):
+        time.sleep(1)
+        work_que_tmp = []
+        for node in work_que:
+            if node.status == 'online':
+                log.info('Successfully publish model %s/%s to %s' %
+                        (node.model_name, node.model_ver, node.path))
+            elif node.status == 'deploy_failed':
+                log.error('Failed to publish model %s/%s to %s!' %
+                        (node.model_name, node.model_ver, node.path))
+            else:
+                work_que_tmp.append(node) # not finish
+
+        num_done = len(work_que) - len(work_que_tmp)
+        work_que = work_que_tmp
+        for i in range(min(len(pending_list), num_done)):
+            _target = pending_list.pop()
+            log.info('Trying to publish to %s' % _target)
+            node = ZkNode(client, _target, model_name, model_ver)
+            node.set_data()
+            work_que.append(node)
+
+
 def publish_model(client):
     # check target exists
     if not client.exists(target):
-        log.warn('%s does not exist on omi server, now create it!' % target)
-        client.ensure_path(target)
-    log.debug("trying to publish model...")
+        if is_cluster:
+            raise Exception('Cluster %s does not exist on omi server!' % target)
+        else:
+            log.warn('%s does not exist on omi server, now creating it!' % target)
+            client.ensure_path(target)
     children = client.get_children(target)
     if len(children) > 0:
         # not a leaf/host
         if not is_cluster:
             raise Exception('%s is a cluster node, you have to specify --cluster' % target)
-        publish_model_batch(client, children)
+        if batch_size > 1:
+            publish_model_batch_parallel(client, children)
+        else:
+            publish_model_batch(client, children)
     else:
-        # host node
+        # single host
         publish_model_host(client, target)
 
 
@@ -268,12 +327,6 @@ if __name__ == '__main__':
         client.start()
 
         publish_model(client)
-
-        # while True:
-            # cmd = sys.stdin.readline()
-            # cmd = cmd.strip()
-            # if cmd == 'quit':
-                # break
 
         client.stop()
         sys.exit(0)
