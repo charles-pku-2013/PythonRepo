@@ -121,15 +121,7 @@ class ZkNode:
         self.path = path
         self.model_name = model
         self.model_ver = ver
-
-        # load data on zk node
-        data, stat = self.client.get(self.path)
         self.data = {}
-        try:
-            self.data = json.loads(data)
-        except:
-            pass
-        # print self.data
 
         @self.client.DataWatch(self.path)
         def OnDataChange(data, stat):
@@ -160,6 +152,19 @@ class ZkNode:
                 self.status = 'deploy_failed'
 
     def set_data(self):
+        lock = self.client.Lock(self.path, 'model_mgr')
+        with lock:
+            # load data on zk node
+            data, stat = self.client.get(self.path)
+            try:
+                self.data = json.loads(data)
+            except:
+                pass
+            # then update data
+            self._set_data()
+
+
+    def _set_data(self):
         model_list = []
         ver_info = {'version' : int(self.model_ver), 'status' : 'deploy_waiting'}
 
