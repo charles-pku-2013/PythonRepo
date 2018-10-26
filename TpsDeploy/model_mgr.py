@@ -232,21 +232,19 @@ def publish_model_host(client, target):
     node.wait_finish()
 
 
-def publish_model_batch(client, children):
-    for child in children:
-        path = target + '/' + child
+def publish_model_batch(client, path_list):
+    for path in path_list:
         try:
             publish_model_host(client, path)
         except Exception as ex:
             log.error(str(ex))
 
 
-def publish_model_batch_parallel(client, children):
+def publish_model_batch_parallel(client, path_list):
     pending_list = []
     work_que = []
 
-    for child in children:
-        path = target + '/' + child
+    for path in path_list:
         pending_list.append(path)
     pending_list.sort(reverse = True)
     # for item in pending_list:
@@ -291,7 +289,17 @@ def publish_model(client):
         else:
             log.warn('%s does not exist on omi server, now creating it!' % target)
             client.ensure_path(target)
-    children = client.get_children(target)
+
+    _children = client.get_children(target)
+    children = []
+    for child in _children:
+        path = target + '/' + child
+        stat = client.exists(path)
+        if stat and (not stat.ephemeralOwner):
+            children.append(path)
+
+    print 'children = %s' % children
+
     if len(children) > 0:
         # not a leaf/host
         if not is_cluster:

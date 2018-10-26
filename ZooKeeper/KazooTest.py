@@ -89,7 +89,7 @@ def test_lock(client):
     print 'Trying to acquire the lock.'
     with lock:
         print 'Lock acquired, doing work...'
-        time.sleep(10)
+        time.sleep(30)
     print 'Job done, release the lock.'
 
 
@@ -150,6 +150,22 @@ if __name__ == '__main__':
             # test_json(model_cfg_json)
         # model_cfg_json = json.dumps(model_cfg_json)
         # test_set_data(client, "/TPS/Cluster1/Host1", model_cfg_json)
+
+        # if sys.argv[1] == 'test':
+            # node_path = '/TPS/Cluster1/Host1'
+            # stat = client.exists(node_path)
+            # print stat
+            # if not stat.ephemeralOwner:
+                # print '%s is not a ephemeral node' % node_path
+            # children = client.get_children(node_path)
+            # print children
+            # if len(children):
+                # path = node_path + '/' + children[0]
+                # stat = client.exists(path)
+                # print stat
+                # if stat.ephemeralOwner:
+                    # print '%s is a ephemeral node' % node_path
+            # sys.exit(0)
 
         # test_lock(client)
         # client.stop()
