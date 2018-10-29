@@ -12,7 +12,6 @@
 from kazoo.client import KazooClient
 from kazoo.protocol.states import KazooState
 from enum import Enum
-from kazoo.exceptions import BadVersionError
 import sys, json, logging, getopt, time
 
 omi_servers = None
@@ -123,7 +122,6 @@ class ZkNode:
         self.model_name = model
         self.model_ver = ver
         self.data = {}
-        self.version = 1
 
         @self.client.DataWatch(self.path)
         def OnDataChange(data, stat):
@@ -154,32 +152,16 @@ class ZkNode:
                 self.status = 'deploy_failed'
 
     def set_data(self):
-        loop_flag = True
-        retval = None
-
-        while loop_flag:
-            # first load data on zk node
-            self._load_data()
-            # then update data
-            retval = self._set_data()
-            if retval <= 0: # success or fail, > 0 retry
-                loop_flag = False
-
-        if retval == 0:
-            self.status = "deploy_waiting"
-        else:
-            self.status = "deploy_failed"
-
-    def _load_data(self):
-        stat = None
-        try:
+        lock = self.client.Lock(self.path, 'model_mgr')
+        with lock:
+            # load data on zk node
             data, stat = self.client.get(self.path)
-            self.data = json.loads(data)
-        except:
-            pass
-        finally:
-            if stat and (stat.version):
-                self.version = stat.version
+            try:
+                self.data = json.loads(data)
+            except:
+                pass
+            # then update data
+            self._set_data()
 
 
     def _set_data(self):
@@ -224,17 +206,8 @@ class ZkNode:
             if not found_ver:
                 ver_list.append(ver_info)
 
-        try:
-            # print 'updating %s, version = %d' % (self.path, self.version)
-            self.client.set(self.path, json.dumps(self.data), version=self.version)
-        except BadVersionError:
-            log.warn('Version conflict when updating %s, try again...' % self.path)
-            return 1
-        except Exception as ex:
-            log.error('Updating %s fail %s' % (self.path, str(ex)))
-            return -1
-
-        return 0
+        self.client.set(self.path, json.dumps(self.data))
+        self.status = "deploy_waiting"
 
     def wait_finish(self):
         while True:

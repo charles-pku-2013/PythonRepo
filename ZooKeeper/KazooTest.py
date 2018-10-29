@@ -4,6 +4,7 @@
 
 from kazoo.client import KazooClient
 from kazoo.protocol.states import KazooState
+from kazoo.exceptions import BadVersionError
 import sys, json, logging, time
 
 def build_json(_dict):
@@ -93,6 +94,24 @@ def test_lock(client):
     print 'Job done, release the lock.'
 
 
+def test_read_write(client):
+    path = '/TPS/Cluster1/Host1'
+    data, stat = client.get(path)
+    ver = 1
+    # print dir(stat)
+    if stat and (stat.version):
+        ver = stat.version
+    print 'Before set data, ver = %d' % ver
+    sys.stdin.readline()
+    try:
+        stat = client.set(path, 'VersionTest', version=ver)
+        print 'After set data, stat is: %s' % str(stat)
+    except BadVersionError as ex:
+        print 'BadVersion %s' % str(ex)
+    except Exception as ex:
+        print '%s' % str(ex)
+
+
 if __name__ == '__main__':
     client = None
     try:
@@ -168,6 +187,10 @@ if __name__ == '__main__':
             # sys.exit(0)
 
         # test_lock(client)
+        # client.stop()
+        # sys.exit(0)
+
+        # test_read_write(client)
         # client.stop()
         # sys.exit(0)
 
