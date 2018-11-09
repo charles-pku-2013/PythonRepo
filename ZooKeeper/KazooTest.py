@@ -102,7 +102,8 @@ def test_read_write(client):
     if stat and (stat.version):
         ver = stat.version
     print 'Before set data, ver = %d' % ver
-    sys.stdin.readline()
+    instr = sys.stdin.readline()
+    ver = int(instr)
     try:
         stat = client.set(path, 'VersionTest', version=ver)
         print 'After set data, stat is: %s' % str(stat)

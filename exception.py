@@ -97,6 +97,29 @@ if __name__ == '__main__':
             sys.stderr.write('Exception: %s\n' % e)
 
 
+# catch exception in function, add info and re-throw to main
+def _check_agent(host):
+    sock = None
+    try:
+        host = host.split('/')[-1]
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
+        sock.settimeout(2) # 10s
+        sock.sendto('ping', (host, agent_port))
+        data, addr = sock.recvfrom(1024)
+        if not data:
+            log.error('model_agent does not start properly on host %s' % host)
+            return False
+        return True
+    except socket.timeout:
+        log.error('model_agent is not running on host %s' % host)
+        return False
+    except Exception as ex:
+        raise Exception('_check_agent error: %s' % ex)
+    finally:
+        if sock:
+            sock.close()
+
+
 """
 def main():
     test()

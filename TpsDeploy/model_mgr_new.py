@@ -1,18 +1,25 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-#
-# Examples:
-# batch publish:
-# python TpsDeploy/model_mgr.py --model knn/1 --target Cluster1 --cluster --batch 3
-# single publish:
-# python TpsDeploy/model_mgr.py --model knn/1 --target Cluster1/Host1
-# check:
-# python TpsDeploy/model_mgr.py --model knn/1 --target 127.0.0.1 --check
+
+"""
+下一版，这次上线前改不好就用现在的版本
+每次运行用subcmd指定要执行的任务如 publish check operate
+Examples:
+# 发布模型
+model_mgr.py publish --model ... --target ...
+# check
+model_mgr.py check --model ... --target ...
+# operate
+model_mgr.py op add --target ...
+model_mgr.py op delete --target ...
+model_mgr.py op root --target ...
+
+"""
 
 from kazoo.client import KazooClient
 from kazoo.protocol.states import KazooState
 from kazoo.exceptions import BadVersionError
-import os, sys, json, logging, getopt, time, socket
+import sys, json, logging, getopt, time
 import ConfigParser
 
 #http
@@ -20,7 +27,7 @@ import urllib
 import urllib2
 
 # model version num
-model_version_num = 10
+model_version_num = 3
 
 zk_servers = None
 zk_path = None
@@ -31,174 +38,13 @@ model_ver = None
 target = None
 is_cluster = False
 batch_size = 1
-is_check = False
-is_show = False
-operate = None
 is_rollback = False
 retry_cnt = 0
-agent_port = None
 
 # model load check
 request_url = 'http://HOST:8888/model/status/servable_all'
 
 log = logging.getLogger(__name__)
-
-def print_usage():
-    print '1 Usage:'
-    print '\t%s --model $model_name/$model_version --target $zk_path [--cluster] [--batch N]' % sys.argv[0]
-    print ''
-    print '--model:\t存储于Model Repository上的要发布模型信息，格式:模型名/版本号'
-    print '--target:\t要发布的目标集群或主机，默认是单台主机，集群发布需要加 --cluster 参数，格式:/TPS/cluster_name/host_ip_or_name'
-    print '--cluster:\t指定发布目标是集群 bool参数'
-    print '--batch:\t集群发布时一次发布的主机数量，默认1'
-    print '--rollback:\t版本回滚，删除线上比指定模型版本高的所有模型'
-    print '--retry:\t失败后重试次数'
-    print '--check:\t单机发布完成后检查是否成功'
-    print '--show:\t显示指定主机上的模型信息'
-    print ''
-    print 'Examples:'
-    print 'single host:'
-    print '\t%s --model knn/1 --target Cluster1/Host1' % sys.argv[0]
-    print 'batch cluster:'
-    print '\t%s --model knn/1 --target Cluster1 --cluster --batch 10' % sys.argv[0]
-    print 'check:'
-    print '\t%s --model knn/1 --target $TPS_Host_IP --check' % sys.argv[0]
-    print 'display model info on host:'
-    print '\t%s --target cluster/host --show' % sys.argv[0]
-    print ''
-    print '2 Usage:'
-    print '\t%s --target $cluster --operate $cmd' % sys.argv[0]
-    print ''
-    print '--target:\t目标集群ZK节点，参考配置文件server.conf cluster_node条目'
-    print '--operate:\t创建/删除目标集群ZK节点，格式：add | delete'
-    print ''
-    print 'Examples:'
-    print 'add cluster:'
-    print '\t%s --target Cluster1 --operate add' % sys.argv[0]
-    print 'delete cluster:'
-    print '\t%s --target Cluster1 --operate delete' % sys.argv[0]
-    print 'delete zk root path: --Do not recommend to use it'
-    print '\t%s --target Cluster1 --operate zk_root' % sys.argv[0]
-    print ''
-
-def parse_args():
-    global model_name
-    global model_ver
-    global target
-    global is_cluster
-    global batch_size
-    global is_check
-    global is_show
-    global operate
-    global is_rollback
-    global retry_cnt
-    try:
-        if len(sys.argv) < 2:
-            print_usage()
-            sys.exit(0)
-
-        opts, args = getopt.getopt(sys.argv[1:], "",
-                ["help", "operate=", "model=", "target=", "cluster", "batch=", "check", "rollback", "show"])
-
-        for opt, arg in opts:
-            if opt in ("--model"):
-                lst = str(arg).split('/')
-                if len(lst) != 2:
-                    raise Exception('--model should be in format model_name/model_version')
-                model_name = lst[0]
-                model_ver = lst[1]
-            elif opt in ("--target"):
-                target = str(arg)
-            elif opt in ("--cluster"):
-                is_cluster = True
-            elif opt in ("--batch"):
-                batch_size = int(arg)
-            elif opt in ("--check"):
-                is_check = True
-            elif opt in ("--show"):
-                is_show = True
-            elif opt in ("--help"):
-                print_usage()
-                sys.exit(0)
-            elif opt in ("--operate"):
-                operate = str(arg)
-            elif opt in ("--rollback"):
-                is_rollback = True
-            elif opt in ("--retry"):
-                retry_cnt = int(arg)
-            else:
-                log.error('Invalid arg: %s' % opt)
-                print_usage()
-                sys.exit(-1)
-
-        if is_show:
-            if not target:
-                log.error("target host must be set with --target")
-                print_usage()
-                sys.exit(-1)
-            return
-
-        if operate is None:
-            if (not model_name) or (not model_ver):
-                log.error("Model info must be set with --model in form of model_name/model_version")
-                print_usage()
-                sys.exit(-1)
-            elif not target:
-                log.error("target host/cluster must be set with --target")
-                print_usage()
-                sys.exit(-1)
-            elif (not is_cluster) and (batch_size > 1):
-                log.error("--batch must be used together with --cluster")
-                print_usage()
-                sys.exit(-1)
-            elif batch_size < 1:
-                log.error("Invalid batch_size! --batch must be above 0")
-                print_usage()
-                sys.exit(-1)
-
-    except getopt.GetoptError as err:
-        log.error("%s" % err)
-        print_usage()
-        sys.exit(-1)
-
-
-def _check_agent(host):
-    sock = None
-    try:
-        host = host.split('/')[-1]
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # UDP
-        sock.settimeout(2) # 10s
-        sock.sendto('ping', (host, agent_port))
-        data, addr = sock.recvfrom(1024)
-        if not data:
-            log.error('model_agent does not start properly on host %s' % host)
-            return False
-        return True
-    except socket.timeout:
-        log.error('model_agent is not running on host %s' % host)
-        return False
-    finally:
-        if sock:
-            sock.close()
-
-def check_agent(host):
-    try_cnt = 5 # ping 5 times, each wait 2s
-    retval = False
-    for i in range(try_cnt):
-        retval = _check_agent(host)
-        if retval:
-            return retval
-    return retval
-
-def read_model_repo_config(client):
-    global agent_port
-    try:
-        config_path = '/tfs/deploy_agent_config'
-        data, _ = client.get(config_path)
-        model_config_data = json.loads(data)
-        agent_port = int(model_config_data['agent_port'])
-    except Exception as ex: # re-throw to main
-        raise Exception('read_model_repo_config() error %s' % ex)
 
 
 class ZkNode:
@@ -240,10 +86,6 @@ class ZkNode:
                 self.status = 'deploy_failed'
 
     def set_data(self):
-        if not check_agent(self.path):
-            self.status = "deploy_failed"
-            return
-
         loop_flag = True
         retval = None
 
@@ -324,21 +166,15 @@ class ZkNode:
                 if not found_ver:
                     ver_list.append(ver_info)
 
-                # limit version count
-                if len(ver_list) > model_version_num:
-                    tmp_verlist = []
-                    count = 0
-                    ver_list.sort(key=lambda x:x['version'], reverse=True) # 按版本号从大到小进行排序
-                    for item in ver_list:
-                        if item['status'] == 'online':
-                            if count < model_version_num:
-                                tmp_verlist.append(item)
-                            count = count + 1
-                        else:
-                            tmp_verlist.append(item)
-                    tmp_verlist.sort(key=lambda x:x['version'])
-                    target_model['versions'] = tmp_verlist
-
+                # limit version count 3
+                if len(ver_list) > 3:
+                    tmp_verlist = sorted(ver_list,key=lambda x:x['version'])
+                    if tmp_verlist[0]['status'] == 'online':
+                        tmp_verlist.pop(0)
+                        target_model['versions'] = tmp_verlist
+                    else:
+                        raise Exception('Target model %s/%s status failed!' %
+                                (self.model_name, tmp_verlist[0]['version']))
         # set data on zk
         try:
             # print 'updating %s, version = %d' % (self.path, self.version)
@@ -352,15 +188,9 @@ class ZkNode:
 
         return 0
 
-    def check_status(self):
-        if not check_agent(self.path):
-            self.status = "deploy_failed"
-        return self.status
-
     def wait_finish(self):
         while True:
             time.sleep(1)
-            self.check_status()
             if self.status == 'online':
                 log.info('Successfully publish model %s/%s to %s' %
                         (self.model_name, self.model_ver, self.path))
@@ -437,15 +267,14 @@ def publish_model_batch_parallel(client, path_list, fail_list):
         time.sleep(1)
         work_que_tmp = []
         for node in work_que:
-            status = node.check_status()
-            if status == 'online':
+            if node.status == 'online':
                 log.info('Successfully publish model %s/%s to %s' %
                         (node.model_name, node.model_ver, node.path))
-            elif status == 'deploy_failed':
+            elif node.status == 'deploy_failed':
                 log.error('Failed to publish model %s/%s to %s!' %
                         (node.model_name, node.model_ver, node.path))
                 fail_list.append(node.path)
-            elif status == 'file_not_exist': # 不需要重试
+            elif node.status == 'file_not_exist': # 不需要重试
                 log.error('Failed to publish model %s/%s to %s, because it not exist!' %
                         (node.model_name, node.model_ver, node.path))
             else:
@@ -560,13 +389,6 @@ def load_check(host, model, version):
         log.error('happen error:%s' % str(e))
         return 1
 
-def do_check(host, model, version):
-    #load check
-    ret = load_check(host, model, version)
-    if ret != 0:
-        return ret
-    # score check
-    return 0
 
 def read_conf(target):
     global zk_servers
@@ -574,11 +396,8 @@ def read_conf(target):
     global cluster_node
     global cluster_iplist
 
-    config_file = 'server.conf'
     cf = ConfigParser.ConfigParser()
-    if not os.path.isfile(config_file):
-        raise Exception('%s is missing!' % config_file)
-    cf.read(config_file)
+    cf.read("server.conf")
     cluster_nodes = cf.get('clusters', 'cluster_node')
     cluster_list = cluster_nodes.split(',')
     # get cluster_node
@@ -597,82 +416,98 @@ def read_conf(target):
 
     return 0
 
-# operate: add delete zk_root
-def zk_clusterNode():
-    # read conf
+
+def parse_publish_args(arglist):
+    global model_name
+    global model_ver
     global target
-    global operate
-    global is_check
-    clusternode = target
-    conf_ret = read_conf(clusternode)
-    if conf_ret != 0:
-        log.error('Invalid target param, clusternode:%s!' % clusternode)
-        return -1
-    # create node
-    zk_client = KazooClient(hosts = zk_servers)
-    zk_client.start()
+    global is_cluster
+    global batch_size
+    global is_rollback
+    global retry_cnt
 
-    #  operate
-    zk_node = zk_path + clusternode
-    if operate == 'zk_root':
-        zk_node = zk_path
-        operate = 'delete'
-    exist_flag = zk_client.exists(zk_node)
-    if operate == 'delete':
-        if exist_flag:
-            zk_client.delete(zk_node,recursive=True)
-            log.info('Delete cluster:%s node success!' % clusternode)
-            if is_check:
-                zk_client.delete(zk_path,recursive=True)
-                log.info('Delete zk_path:%s node success!' % clusternode)
-        else:
-            log.info('cluster:%s node not exist!' % clusternode)
-    elif operate == 'add':
-        if not exist_flag:
-            zk_client.ensure_path(zk_node)
-        for host in cluster_iplist:
-            new_node = zk_node + '/' + host
-            if not zk_client.exists(new_node):
-                zk_client.create(new_node, b'')
+    def print_usage():
+        print 'Usage:'
+        print '\t%s --model $model_name/$model_version --target $zk_path [--cluster] [--batch N]' % sys.argv[0]
+        print ''
+        print '--model:\t存储于Model Repository上的要发布模型信息，格式:模型名/版本号'
+        print '--target:\t要发布的目标集群或主机，默认是单台主机，集群发布需要加 --cluster 参数，格式:/TPS/cluster_name/host_ip_or_name'
+        print '--cluster:\t指定发布目标是集群 bool参数'
+        print '--batch:\t集群发布时一次发布的主机数量，默认1'
+        print '--rollback:\t版本回滚，删除线上比指定模型版本高的所有模型'
+        print '--retry:\t失败后重试次数'
+        print '--check:\t单机发布完成后检查是否成功'
+        print ''
+        print 'Examples:'
+        print 'single host:'
+        print '\t%s --model knn/1 --target Cluster1/Host1' % sys.argv[0]
+        print 'batch cluster:'
+        print '\t%s --model knn/1 --target Cluster1 --cluster --batch 10' % sys.argv[0]
+        print ''
 
-        # check host node
-        children = zk_client.get_children(zk_node)
-        if len(children) != len(cluster_iplist):
-            log.error('Create cluster:%s node failed!' % clusternode)
-            zk_client.stop()
-            return -1
-        log.info('create cluster:%s node success!' % clusternode)
+    try:
+        if len(arglist) <= 0:
+            print_usage() # TODO multi level
+            sys.exit(0)
 
-    else:
-        log.error('operate cluster:%s node cmd:%s not exist!' % (operate, clusternode))
-        zk_client.stop()
-        return -1
+        opts, args = getopt.getopt(arglist, "",
+                ["help", "model=", "target=", "cluster", "batch=", "rollback"])
 
-    zk_client.stop()
-    return 0
+        for opt, arg in opts:
+            if opt in ("--model"):
+                lst = str(arg).split('/')
+                if len(lst) != 2:
+                    raise Exception('--model should be in format model_name/model_version')
+                model_name = lst[0]
+                model_ver = lst[1]
+            elif opt in ("--target"):
+                target = str(arg)
+            elif opt in ("--cluster"):
+                is_cluster = True
+            elif opt in ("--batch"):
+                batch_size = int(arg)
+            elif opt in ("--help"):
+                print_usage()
+                sys.exit(0)
+            elif opt in ("--rollback"):
+                is_rollback = True
+            elif opt in ("--retry"):
+                retry_cnt = int(arg)
+            else:
+                log.error('Invalid arg: %s' % opt)
+                print_usage()
+                sys.exit(-1)
+
+        if (not model_name) or (not model_ver):
+            log.error("Model info must be set with --model in form of model_name/model_version")
+            print_usage()
+            sys.exit(-1)
+        elif not target:
+            log.error("target host/cluster must be set with --target")
+            print_usage()
+            sys.exit(-1)
+        elif (not is_cluster) and (batch_size > 1):
+            log.error("--batch must be used together with --cluster")
+            print_usage()
+            sys.exit(-1)
+        elif batch_size < 1:
+            log.error("Invalid batch_size! --batch must be above 0")
+            print_usage()
+            sys.exit(-1)
+
+    except getopt.GetoptError as err:
+        log.error("%s" % err)
+        print_usage()
+        sys.exit(-1)
 
 
-def show_node_info(client):
-    zk_node = zk_path + target
-    data, _ = client.get(zk_node)
-    model_cfg = json.loads(data)
-    print json.dumps(model_cfg, indent=4)
-
-
-if __name__ == '__main__':
+def do_publish(arglist):
     client = None
     try:
-        #logging.basicConfig(level = logging.INFO)
-        #logging.basicConfig(format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',level=logging.INFO,
-        #        datefmt='%a, %d %b %Y %H:%M:%S',
-        #        filename='model_manager.log',
-        #        filemode='w')
-        # pathname | filename
-        logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s',level=logging.INFO)
-        # model deploy cmd
-        parse_args()
+        log.info('Running publish...')
 
-        #log.info('zk_servers: %s' % zk_servers)
+        parse_publish_args(arglist)
+
         log.info('model_name: %s' % model_name)
         log.info('model_ver: %s' % model_ver)
         log.info('target: %s' % target)
@@ -680,25 +515,6 @@ if __name__ == '__main__':
         log.info('is_rollback: %s' % is_rollback)
         log.info('batch_size: %s' % batch_size)
         log.info('retry_cnt: %d' % retry_cnt)
-        log.info('is_check: %s' % is_check)
-
-        # operate cluster node
-        if operate is not None:
-            ret = zk_clusterNode()
-            if ret == 0:
-                sys.exit(0)
-            else:
-                sys.exit(-1)
-
-        # check
-        if is_check:
-            check_ret = do_check(target, model_name, model_ver)
-            if check_ret == 0:
-                log.info('Model %s/%s load ok.' % (model_name, model_ver))
-                sys.exit(0)
-            else:
-                log.error('Model %s/%s load failed.' % (model_name, model_ver))
-                sys.exit(-1)
 
         # read conf
         conf_ret = read_conf(target)
@@ -708,25 +524,204 @@ if __name__ == '__main__':
 
         client = KazooClient(hosts = zk_servers)
         client.start()
+        publish_model(client)
 
-        if is_show:
-            show_node_info(client)
+    finally:
+        if client:
+            client.stop()
+
+
+def parse_check_args(arglist):
+    global model_name
+    global model_ver
+    global target
+
+    def print_usage():
+        print 'Usage:'
+        print '\t%s check --model $model_name/$model_version --target $zk_path' % sys.argv[0]
+        print ''
+
+    try:
+        if len(arglist) <= 0:
+            print_usage()
+            sys.exit(0)
+
+        opts, args = getopt.getopt(arglist, "",
+                ["help", "model=", "target="])
+
+        for opt, arg in opts:
+            if opt in ("--model"):
+                lst = str(arg).split('/')
+                if len(lst) != 2:
+                    raise Exception('--model should be in format model_name/model_version')
+                model_name = lst[0]
+                model_ver = lst[1]
+            elif opt in ("--target"):
+                target = str(arg)
+            elif opt in ("--help"):
+                print_usage()
+                sys.exit(0)
+            else:
+                log.error('Invalid arg: %s' % opt)
+                print_usage()
+                sys.exit(-1)
+
+        if (not model_name) or (not model_ver):
+            log.error("Model info must be set with --model in form of model_name/model_version")
+            print_usage()
+            sys.exit(-1)
+        elif not target:
+            log.error("target host/cluster must be set with --target")
+            print_usage()
+            sys.exit(-1)
+
+    except getopt.GetoptError as err:
+        log.error("%s" % err)
+        print_usage()
+        sys.exit(-1)
+
+
+def do_check(arglist):
+    log.info('Running check...')
+
+    parse_check_args(arglist)
+
+    log.info('model_name: %s' % model_name)
+    log.info('model_ver: %s' % model_ver)
+    log.info('target: %s' % target)
+
+    ret = load_check(target, model_name, model_ver)
+    if ret == 0:
+        log.info('Model %s/%s load ok.' % (model_name, model_ver))
+        sys.exit(0)
+    else:
+        log.error('Model %s/%s load failed.' % (model_name, model_ver))
+        sys.exit(-1)
+
+
+def do_operate(arglist):
+    def print_usage():
+        print 'Usage:'
+        print '\t%s add --target Cluster1' % sys.argv[0]
+        print '\t%s delete --target Cluster1' % sys.argv[0]
+        print '\t%s root --target Cluster1' % sys.argv[0]
+        print ''
+
+    def parse_op_args(arglist):
+        global target
+        try:
+            if len(arglist) <= 0:
+                print_usage()
+                sys.exit(0)
+
+            opts, args = getopt.getopt(arglist, "", ["help", "target="])
+
+            for opt, arg in opts:
+                if opt in ("--target"):
+                    target = str(arg)
+                elif opt in ("--help"):
+                    print_usage()
+                    sys.exit(0)
+                else:
+                    log.error('Invalid arg: %s' % opt)
+                    print_usage()
+                    sys.exit(-1)
+
+            if not target:
+                log.error("target host/cluster must be set with --target")
+                print_usage()
+                sys.exit(-1)
+
+        except getopt.GetoptError as err:
+            log.error("%s" % err)
+            print_usage()
+            sys.exit(-1)
+
+    if len(arglist) <= 0:
+        print_usage()
+        sys.exit(0)
+
+    subcmd = arglist[0]
+    parse_op_args(arglist[1:])
+    log.info('Running operate %s target = %s' % (subcmd, target))
+
+    zk_client = None
+    try:
+        clusternode = target
+        conf_ret = read_conf(clusternode)
+        if conf_ret != 0:
+            raise Exception('Invalid target param, clusternode:%s!' % clusternode)
+        # create node
+        zk_client = KazooClient(hosts = zk_servers)
+        zk_client.start()
+
+        zk_node = zk_path + clusternode
+        exist_flag = zk_client.exists(zk_node)
+
+        if subcmd == 'root':
+            zk_node = zk_path
+            subcmd = 'delete'
+
+        if subcmd == 'add':
+            if not exist_flag:
+                zk_client.ensure_path(zk_node)
+            for host in cluster_iplist:
+                new_node = zk_node + '/' + host
+                if not zk_client.exists(new_node):
+                    zk_client.create(new_node, b'')
+            # check host node
+            children = zk_client.get_children(zk_node)
+            if len(children) != len(cluster_iplist):
+                raise Exception('Create cluster:%s node failed!' % clusternode)
+            log.info('create cluster:%s node success!' % clusternode)
+        elif subcmd == 'delete':
+            if exist_flag:
+                zk_client.delete(zk_node,recursive=True)
+                log.info('Delete cluster:%s node success!' % clusternode)
+                # if is_check:  # TODO
+                    # zk_client.delete(zk_path,recursive=True)
+                    # log.info('Delete zk_path:%s node success!' % clusternode)
+            else:
+                log.info('cluster:%s node not exist!' % clusternode)
         else:
-            read_model_repo_config(client)
-            publish_model(client)
+            raise Exception('Invalid op command %s' % subcmd)
 
-        client.stop()
+    finally:
+        if zk_client:
+            zk_client.stop()
+
+
+def main():
+    try:
+        logging.basicConfig(format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s',
+                level=logging.INFO)
+
+        if len(sys.argv) < 2:
+            print_usage() # TODO multi level
+            sys.exit(0)
+
+        subcmd = sys.argv[1]
+        if subcmd == 'publish':
+            do_publish(sys.argv[2:])
+        elif subcmd == 'check':
+            do_check(sys.argv[2:])
+        elif subcmd == 'op':
+            do_operate(sys.argv[2:])
+        else:
+            log.error('Invalid command %s' % subcmd)
+            sys.exit(-1)
+
         sys.exit(0)
 
     except KeyboardInterrupt:
         log.warn('Terminated by user.')
-        if client:
-            client.stop()
         sys.exit(0)
 
     except Exception as ex:
         log.error('Exception: %s' % ex)
-        if client:
-            client.stop()
         sys.exit(-1)
+
+
+if __name__ == '__main__':
+    main()
 
